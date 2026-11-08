@@ -11,6 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import api from './api/index.js';
 import { notFound, errorHandler } from './middlewares/errors.middleware.js';
 import { apiLimiter } from './middlewares/rate-limit.middleware.js';
+import { autoLogin } from './middlewares/auto-login.middleware.js';
 
 app.set('trust proxy', 1);
 
@@ -65,7 +66,7 @@ app.get('/api/v1/up', (req, res) => {
 	});
 });
 
-app.use('/api/v1', apiLimiter, api);
+app.use('/api/v1', apiLimiter, autoLogin, api);
 app.use(notFound);
 app.use(errorHandler);
 

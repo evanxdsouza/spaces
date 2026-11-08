@@ -11,7 +11,7 @@ export const SANDBOX_FAILOVER_REGIONS = ["fra1"];
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 
-export const SESSION_TIMEOUT_MS = 3 * HOUR;
+export const SESSION_TIMEOUT_MS = (Number.parseInt(process.env.SANDBOX_TIMEOUT_MINUTES, 10) || 180) * MINUTE;
 
 const VCPUS = Number.parseInt(process.env.SANDBOX_VCPUS, 10) || 2;
 
@@ -34,7 +34,7 @@ export const createSandbox = (name, { port = CODE_SERVER_PORT, vcpus = VCPUS } =
   name,
   image: SANDBOX_IMAGE,
   region: SANDBOX_REGION,
-  failoverRegions: SANDBOX_FAILOVER_REGIONS,
+  ...(process.env.SANDBOX_NO_FAILOVER === 'true' ? {} : { failoverRegions: SANDBOX_FAILOVER_REGIONS }),
   ports: [port],
   timeout: SESSION_TIMEOUT_MS,
   resources: { vcpus },
