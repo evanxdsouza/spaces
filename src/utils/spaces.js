@@ -59,10 +59,12 @@ export const toSandboxPath = (workspaceDir) => `${SANDBOX_ROOT}${sanitizeWorkspa
 const HACKATIME_API_URL = "https://hackatime.hackclub.com/api/hackatime/v1";
 const WAKATIME_JETBRAINS_PLUGIN = "com.wakatime.intellij.plugin";
 
-// A JetBrains IDE on the webtop desktop. The latest release is downloaded once,
+// A JetBrains IDE on the webtop desktop. The latest release, found through
+// JetBrains' releases API, is downloaded once,
 // checked against its SHA-256 and kept in /config, so later updates come from
 // the IDE's own updater. With a Hackatime key, every start writes it to
-// ~/.wakatime.cfg, and the WakaTime plugin is installed once.
+// ~/.wakatime.cfg, and the WakaTime plugin build that matches the IDE is
+// downloaded from the JetBrains Marketplace once.
 const jetbrainsSpace = ({ code, launcher, name, summary, description, packages = [], setup = [] }) => ({
   kind: "gui",
   image: "linuxserver/webtop:debian-xfce",
@@ -82,9 +84,10 @@ const jetbrainsSpace = ({ code, launcher, name, summary, description, packages =
     'LAUNCH="$CONFIG/jetbrains/launch-$LAUNCHER.sh"',
     'if [ ! -f "$DIR/.spaces-installed" ]; then',
     '  tmp=$(mktemp -d)',
-    '  url=$(curl -fsSL -r 0-0 -o /dev/null -w "%{url_effective}" "https://download.jetbrains.com/product?code=$CODE&distribution=linux&latest&type=release")',
+    '  curl -fsSL -o "$tmp/release.json" "https://data.services.jetbrains.com/products/releases?code=$CODE&latest=true&type=release"',
+    '  read -r url sha_url < <(python3 -c \'import json,sys; l=list(json.load(open(sys.argv[1])).values())[0][0]["downloads"]["linux"]; print(l["link"], l["checksumLink"])\' "$tmp/release.json")',
     '  curl -fsSL -o "$tmp/ide.tar.gz" "$url"',
-    '  expected=$(curl -fsSL "$url.sha256" | cut -d" " -f1)',
+    '  expected=$(curl -fsSL "$sha_url" | cut -d" " -f1)',
     '  echo "$expected  $tmp/ide.tar.gz" | sha256sum -c --quiet -',
     '  rm -rf "$DIR"',
     '  mkdir -p "$DIR"',
@@ -106,11 +109,16 @@ const jetbrainsSpace = ({ code, launcher, name, summary, description, packages =
     '  chown 1000:1000 "$CONFIG/.wakatime.cfg"',
     '  chmod 600 "$CONFIG/.wakatime.cfg"',
     '  if [ ! -f "$DIR/.wakatime-plugin" ]; then',
-    `    if docker run --rm --entrypoint "" -u 1000:1000 -e HOME=/config -v "$CONFIG":/config "$IMAGE" /config/jetbrains/launch-$LAUNCHER.sh installPlugins ${WAKATIME_JETBRAINS_PLUGIN} >/dev/null 2>&1; then`,
+    '    read -r build data_dir < <(python3 -c \'import json,sys; p=json.load(open(sys.argv[1])); print(p["productCode"] + "-" + p["buildNumber"], p["dataDirectoryName"])\' "$DIR/product-info.json")',
+    '    plugins="$CONFIG/.local/share/JetBrains/$data_dir"',
+    '    tmp=$(mktemp -d)',
+    `    if curl -fsSL -o "$tmp/plugin.zip" "https://plugins.jetbrains.com/pluginManager?action=download&id=${WAKATIME_JETBRAINS_PLUGIN}&build=$build" && mkdir -p "$plugins" && python3 -m zipfile -e "$tmp/plugin.zip" "$plugins"; then`,
+    '      chown -R 1000:1000 "$CONFIG/.local"',
     '      touch "$DIR/.wakatime-plugin"',
     "    else",
     '      echo "Could not install the WakaTime plugin" >&2',
     "    fi",
+    '    rm -rf "$tmp"',
     "  fi",
     "fi"
   ].join("\n")
@@ -192,7 +200,8 @@ export const spaceConfigs = {
     name: "WebStorm",
     summary: "JetBrains IDE for JavaScript and TypeScript",
     description: "WebStorm",
-    packages: ["nodejs", "npm"]
+    // The image's NodeSource repo has Node with npm built in; Debian's npm conflicts with it.
+    packages: ["nodejs"]
   }),
   "rubymine": jetbrainsSpace({
     code: "RM",

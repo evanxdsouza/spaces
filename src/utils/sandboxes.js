@@ -200,6 +200,7 @@ const sanitizePackages = (packages) => (packages || []).filter((name) => /^[a-z0
 
 // Apps that need extra apt packages run on a local image built from the base
 // image once per sandbox. Docker keeps it in the snapshot, so later starts reuse it.
+// Slim Debian images lack /usr/share/man/man1, and OpenJDK's install fails without it.
 export const guiImageFor = (image, packages) => {
   const names = sanitizePackages(packages);
   if (!names.length) {
@@ -211,7 +212,7 @@ export const guiImageFor = (image, packages) => {
 
 const BUILD_GUI_IMAGE = [
   'docker image inspect "$RUN_IMAGE" >/dev/null 2>&1 && exit 0',
-  'printf "FROM %s\\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*\\n" "$IMAGE" "$PACKAGES" | docker build -q -t "$RUN_IMAGE" - >/dev/null'
+  'printf "FROM %s\\nRUN mkdir -p /usr/share/man/man1 && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*\\n" "$IMAGE" "$PACKAGES" | docker build -q -t "$RUN_IMAGE" - >/dev/null'
 ].join("; ");
 
 export const setupGuiApp = async (sandbox, { image, packages, setup, hackatimeApiKey }) => {
