@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://spaces-api-spaces-tes-3b8041.apps.automiq.me/api/:path*" },
+    { "source": "/godot/", "destination": "/godot/index.html" },
+    { "source": "/love/", "destination": "/love/index.html" },
+    { "source": "/((?!godot/|love/|api/).*)", "destination": "/index.html" }
+  ],
+  "redirects": [
+    { "source": "/godot", "destination": "/godot/", "permanent": false },
+    { "source": "/love", "destination": "/love/", "permanent": false }
+  ],
+  "headers": [
+    {
+      "source": "/godot/(.*)",
+      "headers": [
+        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" }
+      ]
+    }
+  ]
+}
