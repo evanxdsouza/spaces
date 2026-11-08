@@ -56,6 +56,83 @@ export const spaceNameFor = (workspaceDir) => path.posix.basename(sanitizeWorksp
 
 export const toSandboxPath = (workspaceDir) => `${SANDBOX_ROOT}${sanitizeWorkspaceDir(workspaceDir).slice("/config".length)}`;
 
+const HACKATIME_API_URL = "https://hackatime.hackclub.com/api/hackatime/v1";
+const WAKATIME_JETBRAINS_PLUGIN = "com.wakatime.intellij.plugin";
+
+// A JetBrains IDE on the webtop desktop. The latest release, found through
+// JetBrains' releases API, is downloaded once,
+// checked against its SHA-256 and kept in /config, so later updates come from
+// the IDE's own updater. With a Hackatime key, every start writes it to
+// ~/.wakatime.cfg, and the WakaTime plugin build that matches the IDE is
+// downloaded from the JetBrains Marketplace once.
+const jetbrainsSpace = ({ code, launcher, name, summary, description, packages = [], setup = [] }) => ({
+  kind: "gui",
+  image: "linuxserver/webtop:debian-xfce",
+  packages: ["ca-certificates", "curl", "git", ...packages],
+  label: name,
+  title: name,
+  summary,
+  description,
+  beta: true,
+  vcpus: 4,
+  setup: [
+    "set -e",
+    `CODE=${code}`,
+    `LAUNCHER=${launcher}`,
+    `NAME="${name}"`,
+    'DIR="$CONFIG/jetbrains/$LAUNCHER"',
+    'LAUNCH="$CONFIG/jetbrains/launch-$LAUNCHER.sh"',
+    'if [ ! -f "$DIR/.spaces-installed" ]; then',
+    '  tmp=$(mktemp -d)',
+    '  curl -fsSL -o "$tmp/release.json" "https://data.services.jetbrains.com/products/releases?code=$CODE&latest=true&type=release"',
+    '  read -r url sha_url < <(python3 -c \'import json,sys; l=list(json.load(open(sys.argv[1])).values())[0][0]["downloads"]["linux"]; print(l["link"], l["checksumLink"])\' "$tmp/release.json")',
+    '  curl -fsSL -o "$tmp/ide.tar.gz" "$url"',
+    '  expected=$(curl -fsSL "$sha_url" | cut -d" " -f1)',
+    '  echo "$expected  $tmp/ide.tar.gz" | sha256sum -c --quiet -',
+    '  rm -rf "$DIR"',
+    '  mkdir -p "$DIR"',
+    '  tar -xzf "$tmp/ide.tar.gz" -C "$DIR" --strip-components=1',
+    '  echo "$url" > "$DIR/.spaces-installed"',
+    '  chown -R 1000:1000 "$CONFIG/jetbrains"',
+    '  rm -rf "$tmp"',
+    "fi",
+    'mkdir -p "$CONFIG/.config/autostart" "$CONFIG/Desktop" "$CONFIG/projects"',
+    'printf "%s\\n" "#!/bin/sh" \'export PATH="$HOME/.cargo/bin:$PATH"\' \'cd "$HOME/projects"\' "[ -x /config/jetbrains/$LAUNCHER/bin/$LAUNCHER ] && exec /config/jetbrains/$LAUNCHER/bin/$LAUNCHER \\"\\$@\\"" "exec /config/jetbrains/$LAUNCHER/bin/$LAUNCHER.sh \\"\\$@\\"" > "$LAUNCH"',
+    'chmod +x "$LAUNCH"',
+    'printf "%s\\n" "[Desktop Entry]" "Type=Application" "Name=$NAME" "Exec=/config/jetbrains/launch-$LAUNCHER.sh" "Icon=/config/jetbrains/$LAUNCHER/bin/$LAUNCHER.svg" "Terminal=false" > "$CONFIG/.config/autostart/$LAUNCHER.desktop"',
+    'cp "$CONFIG/.config/autostart/$LAUNCHER.desktop" "$CONFIG/Desktop/$LAUNCHER.desktop"',
+    'chmod +x "$CONFIG/Desktop/$LAUNCHER.desktop"',
+    'chown 1000:1000 "$CONFIG/jetbrains" "$LAUNCH" "$CONFIG/.config" "$CONFIG/.config/autostart" "$CONFIG/.config/autostart/$LAUNCHER.desktop" "$CONFIG/Desktop" "$CONFIG/Desktop/$LAUNCHER.desktop" "$CONFIG/projects"',
+    ...setup,
+    'if [ -n "$HACKATIME_API_KEY" ]; then',
+    `  printf "%s\\n" "[settings]" "api_url = ${HACKATIME_API_URL}" "api_key = $HACKATIME_API_KEY" > "$CONFIG/.wakatime.cfg"`,
+    '  chown 1000:1000 "$CONFIG/.wakatime.cfg"',
+    '  chmod 600 "$CONFIG/.wakatime.cfg"',
+    '  if [ ! -f "$DIR/.wakatime-plugin" ]; then',
+    '    read -r build data_dir < <(python3 -c \'import json,sys; p=json.load(open(sys.argv[1])); print(p["productCode"] + "-" + p["buildNumber"], p["dataDirectoryName"])\' "$DIR/product-info.json")',
+    '    plugins="$CONFIG/.local/share/JetBrains/$data_dir"',
+    '    tmp=$(mktemp -d)',
+    `    if curl -fsSL -o "$tmp/plugin.zip" "https://plugins.jetbrains.com/pluginManager?action=download&id=${WAKATIME_JETBRAINS_PLUGIN}&build=$build" && mkdir -p "$plugins" && python3 -m zipfile -e "$tmp/plugin.zip" "$plugins"; then`,
+    '      chown -R 1000:1000 "$CONFIG/.local"',
+    '      touch "$DIR/.wakatime-plugin"',
+    "    else",
+    '      echo "Could not install the WakaTime plugin" >&2',
+    "    fi",
+    '    rm -rf "$tmp"',
+    "  fi",
+    "fi"
+  ].join("\n")
+});
+
+const RUSTUP_SETUP = [
+  'if [ ! -x "$CONFIG/.cargo/bin/rustup" ]; then',
+  '  docker run --rm --entrypoint "" -u 1000:1000 -e HOME=/config -v "$CONFIG":/config "$IMAGE" sh -c \'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path\' >/dev/null 2>&1 || echo "Could not install Rust" >&2',
+  "fi",
+  'touch "$CONFIG/.bashrc"',
+  'grep -q ".cargo/env" "$CONFIG/.bashrc" || echo \'[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"\' >> "$CONFIG/.bashrc"',
+  'chown 1000:1000 "$CONFIG/.bashrc"'
+];
+
 export const spaceConfigs = {
   "code-server": {
     kind: "editor",
@@ -109,6 +186,40 @@ export const spaceConfigs = {
       'chown -R 1000:1000 "$DIR" "$CONFIG/.config" "$CONFIG/Desktop" "$CONFIG/projects"'
     ].join("\n")
   },
+  "intellij": jetbrainsSpace({
+    code: "IIU",
+    launcher: "idea",
+    name: "IntelliJ IDEA",
+    summary: "JetBrains IDE for Java and Kotlin",
+    description: "IntelliJ IDEA",
+    packages: ["default-jdk", "maven"]
+  }),
+  "webstorm": jetbrainsSpace({
+    code: "WS",
+    launcher: "webstorm",
+    name: "WebStorm",
+    summary: "JetBrains IDE for JavaScript and TypeScript",
+    description: "WebStorm",
+    // The image's NodeSource repo has Node with npm built in; Debian's npm conflicts with it.
+    packages: ["nodejs"]
+  }),
+  "rubymine": jetbrainsSpace({
+    code: "RM",
+    launcher: "rubymine",
+    name: "RubyMine",
+    summary: "JetBrains IDE for Ruby and Rails",
+    description: "RubyMine",
+    packages: ["ruby-full", "build-essential", "libyaml-dev", "libssl-dev", "zlib1g-dev"]
+  }),
+  "rustrover": jetbrainsSpace({
+    code: "RR",
+    launcher: "rustrover",
+    name: "RustRover",
+    summary: "JetBrains IDE for Rust",
+    description: "RustRover",
+    packages: ["build-essential", "pkg-config", "libssl-dev"],
+    setup: RUSTUP_SETUP
+  }),
   "freecad": {
     kind: "gui",
     image: "linuxserver/freecad",
@@ -139,10 +250,12 @@ export const lockedError = (space, action = "used") => {
   return error;
 };
 
-export const startSpaceApp = (sandbox, space, password) => {
+// Without hackatimeApiKey (password changes, moderation), an existing
+// ~/.wakatime.cfg in a GUI space is left as it is.
+export const startSpaceApp = (sandbox, space, password, { hackatimeApiKey } = {}) => {
   const config = configFor(space.type);
   if (config?.kind === "gui") {
-    return startGuiApp(sandbox, { image: config.image, password, setup: config.setup });
+    return startGuiApp(sandbox, { image: config.image, packages: config.packages, password, setup: config.setup, hackatimeApiKey });
   }
   return startCodeServer(sandbox, { password, workspacePath: toSandboxPath(space.workspace_dir) });
 };
@@ -279,7 +392,7 @@ export const createContainer = async (password, type, authorization, name) => {
     sandbox = await createSandbox(sandboxName, isGui ? { port: GUI_PORT, vcpus: config.vcpus ?? GUI_VCPUS } : {});
 
     if (isGui) {
-      await setupGuiApp(sandbox, { image: config.image, setup: config.setup });
+      await setupGuiApp(sandbox, { image: config.image, packages: config.packages, setup: config.setup, hackatimeApiKey: user.hackatime_api_key });
     } else {
       await setupCodeServer(sandbox, {
         workspacePath: toSandboxPath(workspaceDir),
@@ -288,7 +401,7 @@ export const createContainer = async (password, type, authorization, name) => {
       });
     }
 
-    const access_url = await startSpaceApp(sandbox, { type: typeLower, workspace_dir: workspaceDir }, password);
+    const access_url = await startSpaceApp(sandbox, { type: typeLower, workspace_dir: workspaceDir }, password, { hackatimeApiKey: user.hackatime_api_key });
 
     const [newSpace] = await pg('spaces')
       .insert({
@@ -396,7 +509,7 @@ export const startContainer = async (spaceId, authorization) => {
 
     const password = space.password || crypto.randomBytes(16).toString('hex');
 
-    const access_url = await startSpaceApp(sandbox, space, password);
+    const access_url = await startSpaceApp(sandbox, space, password, { hackatimeApiKey: user.hackatime_api_key });
 
     if (configFor(space.type)?.kind !== "gui" && user.hackatime_api_key) {
       await ensureHackatime(sandbox, user.hackatime_api_key);
