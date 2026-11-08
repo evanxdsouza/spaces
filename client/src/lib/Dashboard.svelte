@@ -26,7 +26,7 @@
   let startDone = {};
   const holdFinishedBar = () => new Promise((resolve) => setTimeout(resolve, 800));
 
-  const GUI_TYPES = ["kicad", "blender", "freecad"];
+  const GUI_TYPES = ["kicad", "blender", "freecad", "godot", "intellij", "webstorm", "rubymine", "rustrover"];
   $: isGuiType = (type) => {
     const known = spaceTypes.find((spaceType) => spaceType.value === (type || "").toLowerCase());
     return known ? known.kind === "gui" : GUI_TYPES.includes((type || "").toLowerCase());
@@ -775,7 +775,7 @@
             expectedSeconds={isGuiType(newSpaceType) ? 90 : 25}
             steps={createSteps(newSpaceType)}
             done={createDone}
-            note="Setting up a new space takes a little while, up to about 2 minutes for Blender, KiCad and FreeCAD. It's only slow the first time: after that, your space starts in seconds."
+            note="Setting up a new space takes a little while, up to about 2 minutes for Blender, KiCad and FreeCAD, and up to about 10 for JetBrains IDEs. It's only slow the first time: after that, your space starts in seconds."
           />
         {/if}
       </div>

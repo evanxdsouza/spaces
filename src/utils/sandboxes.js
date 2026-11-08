@@ -1,4 +1,5 @@
 import fs from "fs";
+import crypto from "crypto";
 import { Sandbox, Snapshot } from "@vercel/sandbox";
 
 export const CODE_SERVER_PORT = 8080;
@@ -195,7 +196,25 @@ const guiAccessUrl = (domain, password) => {
   return url.toString();
 };
 
-export const setupGuiApp = async (sandbox, { image, setup }) => {
+const sanitizePackages = (packages) => (packages || []).filter((name) => /^[a-z0-9][a-z0-9.+-]*$/.test(name));
+
+// Apps that need extra apt packages run on a local image built from the base
+// image once per sandbox. Docker keeps it in the snapshot, so later starts reuse it.
+export const guiImageFor = (image, packages) => {
+  const names = sanitizePackages(packages);
+  if (!names.length) {
+    return image;
+  }
+  const digest = crypto.createHash("sha256").update(`${image}\n${names.join(" ")}`).digest("hex").slice(0, 16);
+  return `spaces-local/app:${digest}`;
+};
+
+const BUILD_GUI_IMAGE = [
+  'docker image inspect "$RUN_IMAGE" >/dev/null 2>&1 && exit 0',
+  'printf "FROM %s\\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*\\n" "$IMAGE" "$PACKAGES" | docker build -q -t "$RUN_IMAGE" - >/dev/null'
+].join("; ");
+
+export const setupGuiApp = async (sandbox, { image, packages, setup, hackatimeApiKey }) => {
   await run(
     sandbox,
     "command -v dockerd >/dev/null 2>&1 || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io)",
@@ -203,14 +222,30 @@ export const setupGuiApp = async (sandbox, { image, setup }) => {
   );
   await run(sandbox, START_DOCKER, { sudo: true, timeoutMs: 2 * MINUTE });
   await run(sandbox, 'docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull -q "$IMAGE"', { sudo: true, env: { IMAGE: image }, timeoutMs: 10 * MINUTE });
+
+  const runImage = guiImageFor(image, packages);
+  if (runImage !== image) {
+    await run(sandbox, BUILD_GUI_IMAGE, {
+      sudo: true,
+      env: { IMAGE: image, RUN_IMAGE: runImage, PACKAGES: sanitizePackages(packages).join(" ") },
+      timeoutMs: 10 * MINUTE
+    });
+  }
+
   await run(sandbox, 'mkdir -p "$CONFIG" && chown 1000:1000 "$CONFIG"', { sudo: true, env: { CONFIG: GUI_CONFIG_PATH } });
   if (setup) {
-    await run(sandbox, setup, { sudo: true, env: { CONFIG: GUI_CONFIG_PATH }, timeoutMs: 10 * MINUTE });
+    await run(sandbox, setup, {
+      sudo: true,
+      env: { CONFIG: GUI_CONFIG_PATH, IMAGE: runImage, HACKATIME_API_KEY: sanitizeHackatimeKey(hackatimeApiKey) },
+      timeoutMs: 15 * MINUTE
+    });
   }
+
+  return runImage;
 };
 
-export const startGuiApp = async (sandbox, { image, password, setup }) => {
-  await setupGuiApp(sandbox, { image, setup });
+export const startGuiApp = async (sandbox, { image, packages, password, setup, hackatimeApiKey }) => {
+  const runImage = await setupGuiApp(sandbox, { image, packages, setup, hackatimeApiKey });
 
   await run(
     sandbox,
@@ -218,7 +253,7 @@ export const startGuiApp = async (sandbox, { image, password, setup }) => {
       `docker rm -f ${GUI_CONTAINER} >/dev/null 2>&1 || true`,
       `docker run -d --name ${GUI_CONTAINER} -p ${GUI_PORT}:3000 -e PUID=1000 -e PGID=1000 -e PASSWORD="$SPACE_PASSWORD" -e SELKIES_FILE_TRANSFERS=upload,download -e SELKIES_UI_SIDEBAR_SHOW_FILES=True --shm-size=1g -v "$CONFIG":/config "$IMAGE" >/dev/null`
     ].join("; "),
-    { sudo: true, env: { SPACE_PASSWORD: password, CONFIG: GUI_CONFIG_PATH, IMAGE: image }, timeoutMs: 2 * MINUTE }
+    { sudo: true, env: { SPACE_PASSWORD: password, CONFIG: GUI_CONFIG_PATH, IMAGE: runImage }, timeoutMs: 2 * MINUTE }
   );
 
   try {
